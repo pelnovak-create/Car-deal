@@ -1,0 +1,59 @@
+# Copy this file to config.yaml and fill in your own filters/credentials.
+# config.yaml is gitignored so you don't accidentally commit secrets.
+
+filters:
+  make: "Volkswagen"
+  model: "Golf"
+  min_year: 2016
+  max_year: 2021
+  max_mileage: 60000
+  min_price: 5000
+  max_price: 15000
+  postcode: "SW1A 1AA"
+  radius_miles: 50
+  fuel_type: null          # e.g. "Petrol", "Diesel", "Electric", "Hybrid"
+  transmission: null       # e.g. "Manual", "Automatic"
+
+sources:
+  autotrader:
+    enabled: true
+    max_pages: 3
+  gumtree:
+    enabled: true
+    max_pages: 3
+
+pricing:
+  # Group comparable listings by make+model+year ("make_model_year") or just
+  # make+model ("make_model") when estimating a market price.
+  group_by: "make_model_year"
+  # Flag a listing as a good deal if it's priced this many % below the
+  # median price of its comparable group.
+  deal_threshold_pct: 15.0
+  # Minimum number of comparable listings required before trusting the
+  # market price estimate for a group.
+  min_group_size: 3
+
+notifications:
+  # Any combination of: console, desktop, email, telegram
+  backends:
+    - console
+    - desktop
+  email:
+    smtp_host: "smtp.gmail.com"
+    smtp_port: 587
+    use_tls: true
+    username: "you@gmail.com"
+    password: "${EMAIL_APP_PASSWORD}"   # pulled from env var, or hardcode (not recommended)
+    from_addr: "you@gmail.com"
+    to_addr: "you@gmail.com"
+  telegram:
+    bot_token: "${TELEGRAM_BOT_TOKEN}"
+    chat_id: "${TELEGRAM_CHAT_ID}"
+
+database:
+  path: "car_deals.db"
+
+scraping:
+  request_delay_seconds: 3.0
+  timeout_seconds: 15
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
