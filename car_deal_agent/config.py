@@ -98,12 +98,8 @@ def load_config(path: str) -> dict:
 
 
 def validate_config(config: dict) -> None:
-    filters = config.get("filters", {})
-    if not filters.get("make"):
-        raise ConfigError("filters.make is required")
-    if not filters.get("model"):
-        raise ConfigError("filters.model is required")
-
+    # filters.make / filters.model are both optional: leave them null to search
+    # any make/model.
     sources = config.get("sources", {})
     if not any(s.get("enabled") for s in sources.values()):
         raise ConfigError("At least one source under 'sources' must be enabled")

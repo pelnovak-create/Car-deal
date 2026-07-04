@@ -11,6 +11,11 @@ filters:
   model: "Golf"
 """
 
+EMPTY_FILTERS_CONFIG = """
+filters:
+  max_price: 6000
+"""
+
 
 def write_config(tmp_path, content):
     path = tmp_path / "config.yaml"
@@ -27,10 +32,13 @@ def test_loads_minimal_config_with_defaults(tmp_path):
     assert config["notifications"]["backends"] == ["console"]
 
 
-def test_missing_make_raises(tmp_path):
-    path = write_config(tmp_path, "filters:\n  model: Golf\n")
-    with pytest.raises(ConfigError):
-        load_config(path)
+def test_make_and_model_are_optional(tmp_path):
+    """Leaving make/model unset means 'any make/any model'."""
+    path = write_config(tmp_path, EMPTY_FILTERS_CONFIG)
+    config = load_config(path)
+    assert config["filters"]["make"] is None
+    assert config["filters"]["model"] is None
+    assert config["filters"]["max_price"] == 6000
 
 
 def test_missing_file_raises():

@@ -2,15 +2,15 @@
 # config.yaml is gitignored so you don't accidentally commit secrets.
 
 filters:
-  make: "Volkswagen"
-  model: "Golf"
-  min_year: 2016
-  max_year: 2021
-  max_mileage: 60000
-  min_price: 5000
-  max_price: 15000
-  postcode: "SW1A 1AA"
-  radius_miles: 50
+  make: null               # null = any make
+  model: null               # null = any model
+  min_year: 2014
+  max_year: null
+  max_mileage: 150000
+  min_price: null
+  max_price: 6000
+  postcode: "FK8 2BJ"
+  radius_miles: 60
   fuel_type: null          # e.g. "Petrol", "Diesel", "Electric", "Hybrid"
   transmission: null       # e.g. "Manual", "Automatic"
 
