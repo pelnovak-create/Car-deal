@@ -47,7 +47,7 @@ class Scraper(ABC):
     def fetch_listings(self, filters: dict, max_pages: int) -> Iterator["Listing"]:  # noqa: F821
         for page in range(1, max_pages + 1):
             url = self.build_search_url(filters, page)
-            html = self._get(url)
+            html = self.fetch_page_html(url)
             if html is None:
                 return
             soup = BeautifulSoup(html, "lxml")
@@ -64,6 +64,12 @@ class Scraper(ABC):
             if page < max_pages:
                 time.sleep(self.request_delay)
 
+    def fetch_page_html(self, url: str) -> Optional[str]:
+        """Return the fully-loaded HTML for a search results page, or None on
+        failure. Default implementation is a plain HTTP GET; override this for
+        JS-rendered sites that need a real browser to produce their markup."""
+        return self._get(url)
+
     def _get(self, url: str) -> Optional[str]:
         try:
             resp = self.session.get(url, timeout=self.timeout)
@@ -72,6 +78,10 @@ class Scraper(ABC):
         except requests.RequestException as e:
             logger.error("%s: request failed for %s: %s", self.source_name, url, e)
             return None
+
+    def close(self) -> None:
+        """Release any resources (browser processes, etc). No-op by default."""
+        self.session.close()
 
     @abstractmethod
     def build_search_url(self, filters: dict, page: int) -> str: ...

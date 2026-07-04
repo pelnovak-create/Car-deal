@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterator
+from typing import Iterator, Optional
 from urllib.parse import urlencode
 
 from bs4 import BeautifulSoup
@@ -21,20 +21,80 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.autotrader.co.uk/car-search"
 
-# NOTE ON SELECTORS: AutoTrader is a JS-rendered site that changes its markup
-# periodically and may serve different HTML to non-browser clients. These
-# `data-testid` attributes reflect the site's structure as of last review; if
-# `fetch_listings` logs "0 listings parsed", inspect a live search results page
-# and update the selectors below (search this file for CARD_SELECTOR etc).
+# NOTE ON SELECTORS: AutoTrader's search results page is a JS-rendered SPA (the
+# raw HTML response is just an empty <div id="root"> with script tags), which
+# is why this scraper renders the page with a real headless browser (Playwright)
+# before parsing rather than parsing the raw HTTP response body. These
+# `data-testid` attributes reflect the rendered DOM structure as of last
+# review; if `fetch_listings` logs "0 listings parsed", inspect a live,
+# *rendered* search results page (browser dev tools, not view-source) and
+# update the selectors below (search this file for CARD_SELECTOR etc).
 CARD_SELECTOR = "[data-testid='advertCard'], article"
 TITLE_SELECTOR = "[data-testid='search-listing-title'], h2 a, h3 a"
 PRICE_SELECTOR = "[data-testid='search-listing-price']"
 SPECS_SELECTOR = "[data-testid='search-listing-specs'] li, ul li"
 LOCATION_SELECTOR = "[data-testid='search-listing-location']"
 
+# How long to wait for listing cards to appear after navigation before giving
+# up on a page (the SPA needs a moment to fetch and render results client-side).
+RENDER_TIMEOUT_MS = 15_000
+
 
 class AutoTraderScraper(Scraper):
     source_name = "autotrader"
+
+    def __init__(self, scraping_config: dict) -> None:
+        super().__init__(scraping_config)
+        self._playwright = None
+        self._browser = None
+        self._context = None
+
+    def fetch_page_html(self, url: str) -> Optional[str]:
+        self._ensure_browser()
+        page = self._context.new_page()
+        try:
+            from playwright.sync_api import Error as PlaywrightError
+            from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+            page.goto(url, timeout=self.timeout * 1000, wait_until="domcontentloaded")
+            try:
+                page.wait_for_selector(CARD_SELECTOR, timeout=RENDER_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                logger.warning(
+                    "autotrader: no listing cards appeared within %dms for %s "
+                    "(page may show a cookie-consent/bot-check wall, or "
+                    "CARD_SELECTOR in autotrader.py needs updating)",
+                    RENDER_TIMEOUT_MS, url,
+                )
+            return page.content()
+        except PlaywrightError as e:
+            logger.error("autotrader: failed to render %s: %s", url, e)
+            return None
+        finally:
+            page.close()
+
+    def _ensure_browser(self) -> None:
+        if self._browser is not None:
+            return
+        from playwright.sync_api import sync_playwright
+
+        self._playwright = sync_playwright().start()
+        self._browser = self._playwright.chromium.launch(headless=True)
+        self._context = self._browser.new_context(
+            user_agent=self.session.headers.get("User-Agent"),
+        )
+
+    def close(self) -> None:
+        super().close()
+        if self._context is not None:
+            self._context.close()
+            self._context = None
+        if self._browser is not None:
+            self._browser.close()
+            self._browser = None
+        if self._playwright is not None:
+            self._playwright.stop()
+            self._playwright = None
 
     def build_search_url(self, filters: dict, page: int) -> str:
         params = {"sort": "relevance", "page": page}

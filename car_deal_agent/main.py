@@ -30,6 +30,8 @@ def scrape_all(config: dict):
         except Exception:
             logger.exception("Scraping %s failed; continuing with other sources", name)
             continue
+        finally:
+            scraper.close()
         logger.info("%s: found %d listing(s) before filtering", name, len(source_listings))
         listings.extend(source_listings)
     return listings

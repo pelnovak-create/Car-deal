@@ -12,6 +12,11 @@ new listings.
 1. **Scrape** — `car_deal_agent/scrapers/{autotrader,gumtree}.py` fetch search
    result pages for your filters (make, model, year/price/mileage range,
    location) and parse each listing card into a normalized `Listing`.
+   Gumtree's results are plain server-rendered HTML, fetched with
+   `requests`. AutoTrader's results page is a JS-rendered SPA (the raw
+   HTTP response is just an empty `<div id="root">`), so that scraper
+   drives a real headless Chromium via Playwright to render the page
+   before parsing it.
 2. **Filter** — `filters.py` re-applies your filters in Python so results are
    consistent across both sites regardless of what each site's search
    supports natively.
@@ -32,10 +37,12 @@ new listings.
 
 ```bash
 pip install -r requirements.txt
+playwright install chromium   # downloads the browser AutoTrader's scraper drives
 cp config.example.yaml config.yaml
 ```
 
-Edit `config.yaml`: set your `filters` (make/model are required), pick which
+Edit `config.yaml`: set your `filters` (make/model are optional — leave them
+`null` to match any make/model), pick which
 `sources` to scrape, tune the `pricing` thresholds, and configure
 `notifications`. Secrets (email password, Telegram bot token) can be inlined
 or pulled from environment variables using `${VAR_NAME}` syntax.
@@ -69,16 +76,22 @@ For scheduled runs on a server, a cron entry calling a single pass (without
 
 ## Important: scraper maintenance & legal considerations
 
-- Both sites' HTML structure changes periodically and neither publishes a
-  stable API for this. The CSS/`data-testid` selectors in
-  `scrapers/autotrader.py` and `scrapers/gumtree.py` reflect each site's
-  structure as best known at time of writing, but **this code could not be
-  tested against the live sites** from the environment it was built in
-  (outbound network access to those domains was blocked by network policy).
-  Run it once with `--verbose --dry-run`; if the log says
-  `0 listings parsed`, the site's markup has likely changed — inspect a live
-  search results page in your browser's dev tools and update the
-  `*_SELECTOR` constants at the top of the relevant scraper file.
+- Both sites' markup changes periodically and neither publishes a stable API
+  for this. The CSS/`data-testid` selectors in `scrapers/autotrader.py` and
+  `scrapers/gumtree.py` reflect each site's structure as best known at time
+  of writing, but **this code could not be tested against the live sites**
+  from the environment it was built in (outbound network access to those
+  domains was blocked by network policy — confirmed via both `curl` and an
+  authenticated fetch tool, both got 403s). Run it once with
+  `--verbose --dry-run`; if the log says `0 listings parsed`, the site's
+  markup has likely changed:
+  - For **Gumtree** (plain HTML), view-source on a live search results page
+    and update the selectors in `scrapers/gumtree.py`.
+  - For **AutoTrader** (JS-rendered SPA), view-source will show almost
+    nothing useful — you need the *rendered* DOM. Use your browser's dev
+    tools (Inspect Element) on a live search results page, or run
+    `page.content()` after navigating with Playwright yourself, then update
+    the `*_SELECTOR` constants at the top of `scrapers/autotrader.py`.
 - Scraping is rate-limited (`scraping.request_delay_seconds`, default 3s
   between pages) and paginated conservatively (`max_pages` per source,
   default 3) to keep load on these sites low. Review each site's Terms of
@@ -86,11 +99,14 @@ For scheduled runs on a server, a cron entry calling a single pass (without
   prohibit automated scraping outright. This tool is intended for personal,
   low-volume use (checking listings for yourself), not for republishing data
   or high-frequency polling.
-- AutoTrader in particular renders results via JavaScript and may serve
-  bot-detection challenges to non-browser clients; if `requests`-based
-  scraping is consistently blocked, you'd need a headless-browser-based
-  fetch (e.g. Playwright) instead of `requests` — the parsing logic in
-  `parse_results_page` would work unchanged against the same HTML either way.
+- The AutoTrader scraper launches a real headless Chromium per run via
+  Playwright (`AutoTraderScraper.fetch_page_html`/`_ensure_browser` in
+  `scrapers/autotrader.py`) since its search results only exist after
+  client-side JS runs. This is heavier and slower than a plain HTTP request,
+  and AutoTrader may still serve a bot-detection/cookie-consent challenge to
+  headless browsers — if `wait_for_selector` times out waiting for listing
+  cards, that'll be logged, and you may need to add consent-dialog handling
+  or a stealth/anti-detection plugin depending on what AutoTrader shows.
 
 ## Running tests
 
@@ -115,9 +131,9 @@ car_deal_agent/
   notifier.py           # console/desktop/email/telegram backends
   main.py                # CLI orchestration (scrape -> filter -> score -> notify)
   scrapers/
-    base.py               # shared HTTP/rate-limiting/parsing helpers
-    autotrader.py           # AutoTrader-specific URL + markup parsing
-    gumtree.py                # Gumtree-specific URL + markup parsing
+    base.py               # shared pagination/rate-limiting/parsing helpers
+    autotrader.py           # AutoTrader: Playwright-rendered fetch + markup parsing
+    gumtree.py                # Gumtree: requests-based fetch + markup parsing
 config.example.yaml           # copy to config.yaml and fill in
 tests/                          # pytest unit tests
 ```
