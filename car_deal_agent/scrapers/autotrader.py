@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Iterator, Optional
 from urllib.parse import urlencode
 
@@ -24,20 +25,49 @@ BASE_URL = "https://www.autotrader.co.uk/car-search"
 # NOTE ON SELECTORS: AutoTrader's search results page is a JS-rendered SPA (the
 # raw HTML response is just an empty <div id="root"> with script tags), which
 # is why this scraper renders the page with a real headless browser (Playwright)
-# before parsing rather than parsing the raw HTTP response body. These
-# `data-testid` attributes reflect the rendered DOM structure as of last
-# review; if `fetch_listings` logs "0 listings parsed", inspect a live,
-# *rendered* search results page (browser dev tools, not view-source) and
-# update the selectors below (search this file for CARD_SELECTOR etc).
-CARD_SELECTOR = "[data-testid='advertCard'], article"
-TITLE_SELECTOR = "[data-testid='search-listing-title'], h2 a, h3 a"
-PRICE_SELECTOR = "[data-testid='search-listing-price']"
-SPECS_SELECTOR = "[data-testid='search-listing-specs'] li, ul li"
+# before parsing rather than parsing the raw HTTP response body. These reflect
+# the rendered DOM structure as of last review (confirmed against a real
+# listing card's outerHTML); if `fetch_listings` logs "0 listings parsed",
+# inspect a live, *rendered* search results page (browser dev tools, not
+# view-source) and update the selectors below.
+#
+# Each result is a <li id="id-{advertid}" data-advertid="{advertid}"> — the
+# data-advertid attribute gives a reliable external_id directly, no need to
+# parse it out of the URL.
+CARD_SELECTOR = "li[data-advertid]"
+TITLE_SELECTOR = "[data-testid='search-listing-title']"
+SUBTITLE_SELECTOR = "[data-testid='search-listing-subtitle']"
+BADGES_CONTAINER_SELECTOR = "[data-testid='badges-container']"
 LOCATION_SELECTOR = "[data-testid='search-listing-location']"
 
-# How long to wait for listing cards to appear after navigation before giving
-# up on a page (the SPA needs a moment to fetch and render results client-side).
+# The price element's CSS class is a build-hashed name (e.g. "gNFmcp") that
+# changes on every AutoTrader deploy, so it can't be matched reliably. Instead
+# match any standalone text node that's *just* a price ("£11,000") — this
+# naturally skips longer strings like a monthly finance figure with "p/m"
+# attached. If a card ever has more than one bare "£n,nnn" text node (e.g. a
+# separate finance headline price), this takes the first one in DOM order,
+# which is normally the main cash price.
+_PRICE_TEXT_RE = re.compile(r"^£[\d,]+$")
+
+# How long to wait for the first batch of listing cards to appear after
+# navigation (the SPA needs a moment to fetch and render results client-side).
 RENDER_TIMEOUT_MS = 15_000
+
+# Results load via infinite scroll (a `.infinite-scroll-component` container),
+# not classic ?page=N pagination, so `fetch_listings` triggers scrolling to
+# load further batches instead of navigating to a new URL per page. Each
+# "page" in `max_pages` corresponds to one such batch (initial load + one
+# scroll-triggered load each).
+_SCROLL_JS = """
+() => {
+    window.scrollTo(0, document.body.scrollHeight);
+    const el = document.querySelector('.infinite-scroll-component');
+    if (el) { el.scrollTop = el.scrollHeight; }
+}
+"""
+# Stop scrolling for more results after this many consecutive scrolls produce
+# no new cards (i.e. we've reached the end of the list).
+_MAX_STALE_SCROLLS = 3
 
 
 class AutoTraderScraper(Scraper):
@@ -49,15 +79,17 @@ class AutoTraderScraper(Scraper):
         self._browser = None
         self._context = None
 
-    def fetch_page_html(self, url: str) -> Optional[str]:
+    def fetch_listings(self, filters: dict, max_pages: int) -> Iterator[Listing]:
         self._ensure_browser()
-        page = self._context.new_page()
-        try:
-            from playwright.sync_api import Error as PlaywrightError
-            from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-            page.goto(url, timeout=self.timeout * 1000, wait_until="domcontentloaded")
+        url = self.build_search_url(filters, page=1)
+        page = self._context.new_page()
+        seen_ids: set[str] = set()
+        try:
             try:
+                page.goto(url, timeout=self.timeout * 1000, wait_until="domcontentloaded")
                 page.wait_for_selector(CARD_SELECTOR, timeout=RENDER_TIMEOUT_MS)
             except PlaywrightTimeoutError:
                 logger.warning(
@@ -66,10 +98,41 @@ class AutoTraderScraper(Scraper):
                     "CARD_SELECTOR in autotrader.py needs updating)",
                     RENDER_TIMEOUT_MS, url,
                 )
-            return page.content()
-        except PlaywrightError as e:
-            logger.error("autotrader: failed to render %s: %s", url, e)
-            return None
+                return
+            except PlaywrightError as e:
+                logger.error("autotrader: failed to load %s: %s", url, e)
+                return
+
+            stale_scrolls = 0
+            for batch_num in range(1, max_pages + 1):
+                soup = BeautifulSoup(page.content(), "lxml")
+                batch = list(self.parse_results_page(soup))
+                new_listings = [l for l in batch if l.external_id not in seen_ids]
+
+                if not batch and batch_num == 1:
+                    logger.warning(
+                        "autotrader: 0 listings parsed from %s. The site's markup "
+                        "may have changed; check the selectors in autotrader.py.",
+                        url,
+                    )
+
+                seen_ids.update(l.external_id for l in new_listings)
+                yield from new_listings
+
+                if not new_listings:
+                    stale_scrolls += 1
+                    if stale_scrolls >= _MAX_STALE_SCROLLS:
+                        break
+                else:
+                    stale_scrolls = 0
+
+                if batch_num < max_pages:
+                    try:
+                        page.evaluate(_SCROLL_JS)
+                        page.wait_for_timeout(self.request_delay * 1000)
+                    except PlaywrightError as e:
+                        logger.warning("autotrader: scroll attempt failed: %s", e)
+                        break
         finally:
             page.close()
 
@@ -130,24 +193,52 @@ class AutoTraderScraper(Scraper):
 
             href = title_el["href"]
             url = href if href.startswith("http") else f"https://www.autotrader.co.uk{href}"
-            external_id = extract_id_from_url(url)
+            external_id = card.get("data-advertid") or extract_id_from_url(url)
             if not external_id:
                 continue
 
-            title = title_el.get_text(strip=True)
-            price_el = card.select_one(PRICE_SELECTOR)
-            price = parse_price(price_el.get_text(strip=True) if price_el else None)
+            # AutoTrader nests a visually-hidden a11y <span> inside the title
+            # link containing the trim + price as extra text (e.g. "1.5 118i
+            # Sport Euro 6 (s/s) 5dr, £5,000") -- get_text() would append that
+            # straight onto the title with no separator. Only take the link's
+            # own direct text, not its descendants' text.
+            title = "".join(title_el.find_all(string=True, recursive=False)).strip()
+            subtitle_el = card.select_one(SUBTITLE_SELECTOR)
+            subtitle = subtitle_el.get_text(strip=True) if subtitle_el else ""
 
-            spec_texts = [el.get_text(strip=True) for el in card.select(SPECS_SELECTOR)]
-            year = parse_year(title) or next(
-                (parse_year(t) for t in spec_texts if parse_year(t)), None
+            badge_texts: list[str] = []
+            badge_map: dict[str, str] = {}
+            badges_container = card.select_one(BADGES_CONTAINER_SELECTOR)
+            if badges_container:
+                for li in badges_container.select("li"):
+                    text = li.get_text(strip=True)
+                    badge_texts.append(text)
+                    testid = li.get("data-testid")
+                    if testid:
+                        badge_map[testid] = text
+
+            price = _find_price(card)
+
+            year = (
+                parse_year(badge_map.get("registered_year"))
+                or parse_year(title)
+                or next((parse_year(t) for t in badge_texts if parse_year(t)), None)
             )
-            mileage = next((parse_mileage(t) for t in spec_texts if parse_mileage(t)), None)
-            fuel_type = parse_fuel_type(spec_texts)
-            transmission = parse_transmission(spec_texts)
+            mileage = parse_mileage(badge_map.get("mileage")) or next(
+                (parse_mileage(t) for t in badge_texts if parse_mileage(t)), None
+            )
+            fuel_type = parse_fuel_type(badge_texts) or parse_fuel_type([subtitle])
+            transmission = parse_transmission(badge_texts) or parse_transmission([subtitle])
 
             location_el = card.select_one(LOCATION_SELECTOR)
-            location = location_el.get_text(strip=True) if location_el else None
+            location = None
+            if location_el:
+                # The location span wraps an SVG pin icon with its own
+                # <title>text</title> (e.g. "Dealer location"); strip it so it
+                # doesn't get prepended to the actual place name.
+                for svg in location_el.find_all("svg"):
+                    svg.decompose()
+                location = location_el.get_text(strip=True)
 
             make, model = _split_make_model(title)
 
@@ -167,9 +258,21 @@ class AutoTraderScraper(Scraper):
             )
 
 
+def _find_price(card) -> Optional[int]:
+    for text_node in card.find_all(string=_PRICE_TEXT_RE):
+        return parse_price(str(text_node))
+    return None
+
+
 def _split_make_model(title: str) -> tuple[str | None, str | None]:
     """AutoTrader titles are typically '<Make> <Model> <trim/spec...>'."""
     parts = title.split()
     if len(parts) < 2:
         return None, None
-    return parts[0], parts[1]
+    make, model = parts[0], parts[1]
+    # Handle multi-word model families like "1 Series" (BMW) or "C Class"
+    # (Mercedes) so e.g. "BMW 1 Series 118i Sport" doesn't get truncated to
+    # model="1".
+    if len(parts) > 2 and parts[2].lower() in ("series", "class"):
+        model = f"{model} {parts[2]}"
+    return make, model

@@ -77,21 +77,33 @@ For scheduled runs on a server, a cron entry calling a single pass (without
 ## Important: scraper maintenance & legal considerations
 
 - Both sites' markup changes periodically and neither publishes a stable API
-  for this. The CSS/`data-testid` selectors in `scrapers/autotrader.py` and
-  `scrapers/gumtree.py` reflect each site's structure as best known at time
-  of writing, but **this code could not be tested against the live sites**
-  from the environment it was built in (outbound network access to those
-  domains was blocked by network policy — confirmed via both `curl` and an
-  authenticated fetch tool, both got 403s). Run it once with
-  `--verbose --dry-run`; if the log says `0 listings parsed`, the site's
-  markup has likely changed:
+  for this. Outbound network access to autotrader.co.uk/gumtree.com is
+  blocked by policy in the environment this was built in, so the scrapers'
+  *navigation* (actually loading a live search results page end-to-end) could
+  never be run from there. AutoTrader's *parsing* logic (`parse_results_page`
+  in `scrapers/autotrader.py`) was however verified against a real listing
+  card's outerHTML pasted in by hand, including two non-obvious gotchas that
+  are now handled: a visually-hidden accessibility `<span>` nested inside the
+  title link (would otherwise corrupt the title/make/model), and an SVG icon
+  inside the location element (would otherwise leak "Dealer location" into
+  the location text). Gumtree has been confirmed working against the live
+  site. Run `--verbose --dry-run`; if the log says `0 listings parsed`, the
+  site's markup has likely changed further:
   - For **Gumtree** (plain HTML), view-source on a live search results page
     and update the selectors in `scrapers/gumtree.py`.
   - For **AutoTrader** (JS-rendered SPA), view-source will show almost
     nothing useful — you need the *rendered* DOM. Use your browser's dev
-    tools (Inspect Element) on a live search results page, or run
-    `page.content()` after navigating with Playwright yourself, then update
-    the `*_SELECTOR` constants at the top of `scrapers/autotrader.py`.
+    tools (Inspect Element) on a live search results page and update the
+    `*_SELECTOR` constants at the top of `scrapers/autotrader.py`. Note the
+    price element's class name is a build hash that changes on every
+    AutoTrader deploy, which is why price is matched by a standalone
+    "£n,nnn" text pattern instead of a class selector.
+- AutoTrader's results load via infinite scroll (an
+  `.infinite-scroll-component` container), not classic `?page=N` links, so
+  `AutoTraderScraper.fetch_listings` navigates once and then triggers
+  scrolling to load further batches, stopping once a few consecutive scrolls
+  produce no new listings. `max_pages` for this source means "how many such
+  batches to collect," not literal pages.
 - Scraping is rate-limited (`scraping.request_delay_seconds`, default 3s
   between pages) and paginated conservatively (`max_pages` per source,
   default 3) to keep load on these sites low. Review each site's Terms of

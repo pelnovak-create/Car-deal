@@ -14,8 +14,10 @@ logger = logging.getLogger(__name__)
 _MILEAGE_RE = re.compile(r"([\d,]+)\s*miles", re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b(19[5-9]\d|20[0-4]\d)\b")
 _PRICE_RE = re.compile(r"[\d,]+")
-FUEL_TYPES = {"petrol", "diesel", "electric", "hybrid", "plug-in hybrid", "mild hybrid"}
-TRANSMISSIONS = {"manual", "automatic", "semi-automatic"}
+# Ordered longest-first so e.g. "plug-in hybrid" matches before the shorter
+# "hybrid" when both would otherwise match the same text.
+FUEL_TYPES = ("plug-in hybrid", "mild hybrid", "petrol", "diesel", "electric", "hybrid")
+TRANSMISSIONS = ("semi-automatic", "manual", "automatic")
 
 
 class ScraperError(RuntimeError):
@@ -122,20 +124,24 @@ def parse_year(text: Optional[str]) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
-def parse_fuel_type(texts: list[str]) -> Optional[str]:
+def _find_keyword(texts: list[str], keywords: tuple[str, ...]) -> Optional[str]:
+    """Find a keyword as a whole word/phrase within any of the given texts,
+    whether the text is a standalone badge (e.g. "Diesel") or a longer
+    sentence it's embedded in (e.g. "1.6 TDI Match 5dr Diesel Manual")."""
     for text in texts:
-        normalized = text.strip().lower()
-        if normalized in FUEL_TYPES:
-            return text.strip()
+        for keyword in keywords:
+            match = re.search(rf"\b{re.escape(keyword)}\b", text, re.IGNORECASE)
+            if match:
+                return match.group(0)
     return None
+
+
+def parse_fuel_type(texts: list[str]) -> Optional[str]:
+    return _find_keyword(texts, FUEL_TYPES)
 
 
 def parse_transmission(texts: list[str]) -> Optional[str]:
-    for text in texts:
-        normalized = text.strip().lower()
-        if normalized in TRANSMISSIONS:
-            return text.strip()
-    return None
+    return _find_keyword(texts, TRANSMISSIONS)
 
 
 def extract_id_from_url(url: str) -> Optional[str]:
