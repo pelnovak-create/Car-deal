@@ -56,4 +56,8 @@ database:
 scraping:
   request_delay_seconds: 3.0
   timeout_seconds: 15
+  # How long the AutoTrader scraper waits for listing cards to render after
+  # navigation. Raise this if running from a datacenter/VPS network path
+  # where page load is slower than on a home connection.
+  render_timeout_seconds: 30
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"

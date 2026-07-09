@@ -50,8 +50,44 @@ LOCATION_SELECTOR = "[data-testid='search-listing-location']"
 _PRICE_TEXT_RE = re.compile(r"^£[\d,]+$")
 
 # How long to wait for the first batch of listing cards to appear after
-# navigation (the SPA needs a moment to fetch and render results client-side).
-RENDER_TIMEOUT_MS = 15_000
+# navigation (the SPA needs a moment to fetch and render results client-side;
+# this can take noticeably longer from a datacenter/VPS network path than
+# from a home connection). Overridable via scraping.render_timeout_seconds.
+DEFAULT_RENDER_TIMEOUT_MS = 30_000
+
+# Cookie-consent CMPs can withhold page content (including listing data)
+# until consent is recorded -- more likely to trigger for a fresh/datacenter
+# IP with no pre-existing consent cookie than for a residential one. These
+# are a few common consent-management-platform "accept" button selectors;
+# the text-based fallback below catches most others.
+_COOKIE_ACCEPT_SELECTORS = [
+    "#onetrust-accept-btn-handler",        # OneTrust CMP
+    "button[title='Accept All']",           # Quantcast/Sourcepoint CMP
+    "button[data-testid='accept-all-cookies']",
+    "#truste-consent-button",               # TrustArc
+]
+_COOKIE_ACCEPT_TEXT_RE = re.compile(
+    r"^\s*(accept(\s+all)?(\s+cookies)?|allow\s+all(\s+cookies)?|i\s+accept|agree)\s*$",
+    re.IGNORECASE,
+)
+
+# Phrases/markers that indicate a genuine bot-detection/CAPTCHA interstitial
+# rather than an ordinary cookie banner or a plain markup change -- if we see
+# one of these, no amount of selector-fiddling will fix it.
+_BOT_CHALLENGE_TEXT_PATTERNS = [
+    (re.compile(r"checking your browser", re.I), "Cloudflare 'checking your browser' interstitial"),
+    (re.compile(r"just a moment", re.I), "Cloudflare challenge page"),
+    (re.compile(r"attention required", re.I), "Cloudflare block page"),
+    (re.compile(r"pardon our interruption", re.I), "bot-check interstitial ('Pardon Our Interruption')"),
+    (re.compile(r"unusual traffic", re.I), "'unusual traffic' block page"),
+    (re.compile(r"verify you are (a )?human", re.I), "human-verification challenge"),
+    (re.compile(r"are you a robot", re.I), "robot-verification challenge"),
+    (re.compile(r"access denied", re.I), "access-denied block page"),
+    (re.compile(r"\bcaptcha\b", re.I), "CAPTCHA challenge"),
+]
+_BOT_CHALLENGE_IFRAME_HINTS = (
+    "recaptcha", "hcaptcha", "captcha-delivery", "px-cdn", "geo.captcha-delivery",
+)
 
 # Results load via infinite scroll (a `.infinite-scroll-component` container),
 # not classic ?page=N pagination, so `fetch_listings` triggers scrolling to
@@ -78,6 +114,9 @@ class AutoTraderScraper(Scraper):
         self._playwright = None
         self._browser = None
         self._context = None
+        self.render_timeout_ms = int(
+            scraping_config.get("render_timeout_seconds", DEFAULT_RENDER_TIMEOUT_MS / 1000) * 1000
+        )
 
     def fetch_listings(self, filters: dict, max_pages: int) -> Iterator[Listing]:
         self._ensure_browser()
@@ -90,17 +129,41 @@ class AutoTraderScraper(Scraper):
         try:
             try:
                 page.goto(url, timeout=self.timeout * 1000, wait_until="domcontentloaded")
-                page.wait_for_selector(CARD_SELECTOR, timeout=RENDER_TIMEOUT_MS)
-            except PlaywrightTimeoutError:
-                logger.warning(
-                    "autotrader: no listing cards appeared within %dms for %s "
-                    "(page may show a cookie-consent/bot-check wall, or "
-                    "CARD_SELECTOR in autotrader.py needs updating)",
-                    RENDER_TIMEOUT_MS, url,
-                )
-                return
             except PlaywrightError as e:
                 logger.error("autotrader: failed to load %s: %s", url, e)
+                return
+
+            self._dismiss_cookie_banner(page)
+            try:
+                page.wait_for_selector(CARD_SELECTOR, timeout=self.render_timeout_ms)
+            except PlaywrightTimeoutError:
+                # Consent banners sometimes render after the initial paint;
+                # try once more, then give the page a final chance to catch up.
+                if self._dismiss_cookie_banner(page):
+                    try:
+                        page.wait_for_selector(CARD_SELECTOR, timeout=self.render_timeout_ms)
+                    except PlaywrightTimeoutError:
+                        pass
+
+            if page.locator(CARD_SELECTOR).count() == 0:
+                challenge = self._detect_bot_challenge(page)
+                if challenge:
+                    logger.error(
+                        "autotrader: this looks like a bot-detection/CAPTCHA challenge (%s) "
+                        "being served to this IP address for %s -- this is NOT a selector or "
+                        "markup issue, and updating autotrader.py will not fix it. You likely "
+                        "need a different network path (residential proxy, different egress "
+                        "IP) to scrape AutoTrader from here.",
+                        challenge, url,
+                    )
+                else:
+                    logger.warning(
+                        "autotrader: no listing cards appeared within %dms for %s, even after "
+                        "attempting to dismiss a cookie-consent banner and no bot-challenge "
+                        "signature was detected. The site's markup may have changed -- check "
+                        "the selectors in autotrader.py against a live rendered page.",
+                        self.render_timeout_ms, url,
+                    )
                 return
 
             stale_scrolls = 0
@@ -135,6 +198,52 @@ class AutoTraderScraper(Scraper):
                         break
         finally:
             page.close()
+
+    def _dismiss_cookie_banner(self, page) -> bool:
+        """Best-effort dismissal of a cookie-consent banner. Tries the main
+        page plus any iframes (some CMPs render the banner in one). Returns
+        True if something was clicked."""
+        from playwright.sync_api import Error as PlaywrightError
+
+        for frame in page.frames:
+            for selector in _COOKIE_ACCEPT_SELECTORS:
+                try:
+                    frame.locator(selector).first.click(timeout=1000)
+                    logger.info("autotrader: dismissed cookie banner via selector %r", selector)
+                    page.wait_for_timeout(500)
+                    return True
+                except PlaywrightError:
+                    continue
+            for role in ("button", "link"):
+                try:
+                    frame.get_by_role(role, name=_COOKIE_ACCEPT_TEXT_RE).first.click(timeout=1000)
+                    logger.info(
+                        "autotrader: dismissed cookie banner via accessible text (role=%s)", role
+                    )
+                    page.wait_for_timeout(500)
+                    return True
+                except PlaywrightError:
+                    continue
+        return False
+
+    def _detect_bot_challenge(self, page) -> Optional[str]:
+        """Best-effort detection of a bot-detection/CAPTCHA interstitial, as
+        distinct from an ordinary cookie banner or a genuine markup change."""
+        try:
+            body_text = page.locator("body").inner_text(timeout=2000)
+        except Exception:
+            body_text = ""
+        for pattern, description in _BOT_CHALLENGE_TEXT_PATTERNS:
+            if pattern.search(body_text):
+                return description
+        try:
+            for frame in page.frames:
+                src = (frame.url or "").lower()
+                if any(hint in src for hint in _BOT_CHALLENGE_IFRAME_HINTS):
+                    return f"CAPTCHA iframe detected ({frame.url.split('?')[0]})"
+        except Exception:
+            pass
+        return None
 
     def _ensure_browser(self) -> None:
         if self._browser is not None:

@@ -112,13 +112,28 @@ For scheduled runs on a server, a cron entry calling a single pass (without
   low-volume use (checking listings for yourself), not for republishing data
   or high-frequency polling.
 - The AutoTrader scraper launches a real headless Chromium per run via
-  Playwright (`AutoTraderScraper.fetch_page_html`/`_ensure_browser` in
-  `scrapers/autotrader.py`) since its search results only exist after
-  client-side JS runs. This is heavier and slower than a plain HTTP request,
-  and AutoTrader may still serve a bot-detection/cookie-consent challenge to
-  headless browsers — if `wait_for_selector` times out waiting for listing
-  cards, that'll be logged, and you may need to add consent-dialog handling
-  or a stealth/anti-detection plugin depending on what AutoTrader shows.
+  Playwright (`_ensure_browser` in `scrapers/autotrader.py`) since its search
+  results only exist after client-side JS runs. This is heavier and slower
+  than a plain HTTP request. Some networks (particularly datacenter/VPS IPs,
+  vs. a residential connection) get served a cookie-consent banner that
+  withholds listing data until dismissed, or occasionally an outright
+  bot-detection/CAPTCHA challenge:
+  - **Cookie banners** are handled automatically (`_dismiss_cookie_banner`):
+    it tries a few known consent-platform selectors (OneTrust, etc.) plus a
+    text-based fallback that matches any visible "Accept"/"Accept All"/
+    "Allow All"/"I Accept" button or link, including inside iframes. If
+    AutoTrader's banner uses different wording, add it to
+    `_COOKIE_ACCEPT_SELECTORS`/`_COOKIE_ACCEPT_TEXT_RE` at the top of that
+    file.
+  - **Genuine bot-challenges** (Cloudflare, CAPTCHA, "unusual traffic", etc.)
+    are detected separately (`_detect_bot_challenge`) and logged as a clear
+    `ERROR` explicitly saying it's not a selector/markup problem — no code
+    fix will help here, you'd need a different egress path (residential
+    proxy, different IP) instead. A plain `WARNING` ("no listing cards
+    appeared... markup may have changed") means neither a banner nor a known
+    challenge signature was found, so check the selectors instead.
+  - If rendering is just slow on your network, raise
+    `scraping.render_timeout_seconds` (default 30) in your config.
 
 ## Running tests
 

@@ -51,6 +51,11 @@ DEFAULTS: dict[str, Any] = {
     "scraping": {
         "request_delay_seconds": 3.0,
         "timeout_seconds": 15,
+        # How long the AutoTrader scraper (Playwright) waits for listing
+        # cards to render after navigation. Page rendering can be noticeably
+        # slower from a datacenter/VPS network path than from a home
+        # connection, so raise this if you see "no listing cards appeared".
+        "render_timeout_seconds": 30,
         "user_agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
