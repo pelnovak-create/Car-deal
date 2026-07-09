@@ -60,4 +60,9 @@ scraping:
   # navigation. Raise this if running from a datacenter/VPS network path
   # where page load is slower than on a home connection.
   render_timeout_seconds: 30
+  # When the AutoTrader scraper finds 0 listing cards, save a screenshot +
+  # the full rendered HTML here so you can see exactly what the browser saw
+  # (e.g. useful for silent bot-detection that serves a stripped page with
+  # no visible challenge). Set to null to disable.
+  debug_dir: "debug"
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"

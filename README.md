@@ -134,6 +134,13 @@ For scheduled runs on a server, a cron entry calling a single pass (without
     challenge signature was found, so check the selectors instead.
   - If rendering is just slow on your network, raise
     `scraping.render_timeout_seconds` (default 30) in your config.
+  - If AutoTrader still returns 0 listings with no banner and no detected
+    challenge, that can mean a *silent* form of bot detection — a stripped or
+    different page served to that IP with no visible interstitial at all. In
+    that case a screenshot (PNG, full page) and the full rendered HTML are
+    automatically saved to `scraping.debug_dir` (default `debug/`, gitignored)
+    so you can see exactly what the headless browser saw on that run. Set
+    `debug_dir: null` to disable.
 
 ## Running tests
 

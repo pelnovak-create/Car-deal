@@ -56,6 +56,10 @@ DEFAULTS: dict[str, Any] = {
         # slower from a datacenter/VPS network path than from a home
         # connection, so raise this if you see "no listing cards appeared".
         "render_timeout_seconds": 30,
+        # When AutoTrader's scraper finds 0 listing cards, save a screenshot
+        # + the full rendered HTML here so you can see exactly what the
+        # browser saw. Set to null to disable.
+        "debug_dir": "debug",
         "user_agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"

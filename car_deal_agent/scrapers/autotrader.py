@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Iterator, Optional
 from urllib.parse import urlencode
 
@@ -117,6 +119,12 @@ class AutoTraderScraper(Scraper):
         self.render_timeout_ms = int(
             scraping_config.get("render_timeout_seconds", DEFAULT_RENDER_TIMEOUT_MS / 1000) * 1000
         )
+        # When set, a screenshot + full page HTML are saved here whenever 0
+        # listing cards are found, so you can see exactly what the browser
+        # rendered (useful for silent bot-detection that serves a stripped
+        # page with no visible challenge/banner). Set to null/None to disable.
+        debug_dir = scraping_config.get("debug_dir", "debug")
+        self.debug_dir = Path(debug_dir) if debug_dir else None
 
     def fetch_listings(self, filters: dict, max_pages: int) -> Iterator[Listing]:
         self._ensure_browser()
@@ -160,10 +168,13 @@ class AutoTraderScraper(Scraper):
                     logger.warning(
                         "autotrader: no listing cards appeared within %dms for %s, even after "
                         "attempting to dismiss a cookie-consent banner and no bot-challenge "
-                        "signature was detected. The site's markup may have changed -- check "
-                        "the selectors in autotrader.py against a live rendered page.",
+                        "signature was detected. The site's markup may have changed, or this "
+                        "network may be getting a silently different page (e.g. bot detection "
+                        "with no visible challenge) -- check the selectors against a live "
+                        "rendered page, or inspect the debug capture below.",
                         self.render_timeout_ms, url,
                     )
+                self._save_debug_artifacts(page, url)
                 return
 
             stale_scrolls = 0
@@ -198,6 +209,28 @@ class AutoTraderScraper(Scraper):
                         break
         finally:
             page.close()
+
+    def _save_debug_artifacts(self, page, url: str) -> None:
+        """Save a screenshot + the full rendered HTML when 0 listing cards
+        are found, so the actual page a headless browser sees from this
+        network can be inspected after the fact (e.g. to catch silent bot
+        detection that serves a stripped page with no visible challenge)."""
+        if self.debug_dir is None:
+            return
+        try:
+            self.debug_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            base = self.debug_dir / f"autotrader_{stamp}"
+            png_path = base.with_suffix(".png")
+            html_path = base.with_suffix(".html")
+            page.screenshot(path=str(png_path), full_page=True)
+            html_path.write_text(page.content(), encoding="utf-8")
+            logger.warning(
+                "autotrader: saved debug screenshot to %s and HTML to %s (url: %s)",
+                png_path, html_path, url,
+            )
+        except Exception:
+            logger.exception("autotrader: failed to save debug artifacts")
 
     def _dismiss_cookie_banner(self, page) -> bool:
         """Best-effort dismissal of a cookie-consent banner. Tries the main

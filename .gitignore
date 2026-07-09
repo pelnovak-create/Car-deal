@@ -5,3 +5,4 @@ venv/
 config.yaml
 *.db
 .pytest_cache/
+debug/
