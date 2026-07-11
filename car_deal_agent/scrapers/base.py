@@ -73,13 +73,27 @@ class Scraper(ABC):
         return self._get(url)
 
     def _get(self, url: str) -> Optional[str]:
-        try:
-            resp = self.session.get(url, timeout=self.timeout)
-            resp.raise_for_status()
-            return resp.text
-        except requests.RequestException as e:
-            logger.error("%s: request failed for %s: %s", self.source_name, url, e)
-            return None
+        for attempt in range(1, 3):
+            try:
+                resp = self.session.get(url, timeout=self.timeout)
+                if resp.status_code != 200:
+                    logger.warning(
+                        "%s: got status %s for %s (attempt %d/2). Body snippet: %r",
+                        self.source_name, resp.status_code, url, attempt, resp.text[:300],
+                    )
+                    if attempt < 2:
+                        time.sleep(self.request_delay * 3)
+                        continue
+                    return None
+                resp.raise_for_status()
+                return resp.text
+            except requests.RequestException as e:
+                logger.error("%s: request failed for %s: %s", self.source_name, url, e)
+                if attempt < 2:
+                    time.sleep(self.request_delay * 3)
+                    continue
+                return None
+        return None
 
     def close(self) -> None:
         """Release any resources (browser processes, etc). No-op by default."""

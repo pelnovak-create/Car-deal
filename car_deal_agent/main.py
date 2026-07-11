@@ -57,7 +57,7 @@ def run_once(config: dict, dry_run: bool = False) -> int:
         for item in scored:
             is_new = db.upsert_scored_listing(conn, item)
             item.is_new = is_new
-            if is_new and item.is_good_deal:
+            if is_new:
                 new_good_deals.append(item)
 
         if new_good_deals and not dry_run:

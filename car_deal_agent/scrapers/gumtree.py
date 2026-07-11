@@ -25,11 +25,12 @@ BASE_URL = "https://www.gumtree.com/search"
 # names periodically. These selectors reflect the site's structure as of last
 # review; if `fetch_listings` logs "0 listings parsed", inspect a live search
 # results page and update the selectors below.
-CARD_SELECTOR = "article, .listing-tile, [data-q='search-result-tile']"
-TITLE_LINK_SELECTOR = "a.listing-link, a[href*='/p/']"
-PRICE_SELECTOR = ".listing-price, strong.listing-price"
-LOCATION_SELECTOR = ".listing-location, [data-q='listing-location']"
-ATTRIBUTES_SELECTOR = ".listing-attributes span, .listing-attributes li"
+CARD_SELECTOR = "[data-q='search-result']"
+TITLE_LINK_SELECTOR = "a[data-q='search-result-anchor']"
+TITLE_SELECTOR = "[data-q='tile-title']"
+PRICE_SELECTOR = "[data-q='tile-price']"
+LOCATION_SELECTOR = "[data-q='tile-location']"
+ATTRIBUTES_SELECTOR = "[data-q='tile-attributes'] span, [data-q='tile-attributes'] li"
 
 
 class GumtreeScraper(Scraper):
@@ -64,7 +65,8 @@ class GumtreeScraper(Scraper):
             if not external_id:
                 continue
 
-            title = title_el.get_text(strip=True)
+            title_text_el = card.select_one(TITLE_SELECTOR)
+            title = title_text_el.get_text(strip=True) if title_text_el else title_el.get_text(strip=True)
             if not title:
                 continue
 
