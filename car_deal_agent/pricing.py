@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import sqlite3
 import statistics
 from collections import defaultdict
 from typing import Iterable
 
+from car_deal_agent import db
 from car_deal_agent.models import Listing, ScoredListing
 
 
@@ -54,6 +56,51 @@ class MarketPricer:
             prices = [c.price for c in comparables if c.price is not None]
             comparable_count = len(prices)
 
+            market_price = None
+            deal_score_pct = None
+            is_good_deal = False
+
+            if comparable_count >= self.min_group_size:
+                market_price = statistics.median(prices)
+                if market_price > 0:
+                    deal_score_pct = (market_price - listing.price) / market_price * 100
+                    is_good_deal = deal_score_pct >= self.deal_threshold_pct
+
+            results.append(
+                ScoredListing(
+                    listing=listing,
+                    market_price=market_price,
+                    deal_score_pct=deal_score_pct,
+                    comparable_count=comparable_count,
+                    is_good_deal=is_good_deal,
+                )
+            )
+        return results
+
+    def score_with_history(
+        self, listings: Iterable[Listing], conn: sqlite3.Connection
+    ) -> list[ScoredListing]:
+        """Like score(), but compares each listing against historical prices from
+        the app's own database (past scrapes of the same make/model/year) instead
+        of only other listings in the current scrape batch.
+        """
+        listings = [l for l in listings if l.price is not None]
+
+        results = []
+        for listing in listings:
+            year = listing.year if self.group_by == "make_model_year" else None
+            prices = db.get_historical_prices(
+                conn, listing.make, listing.model, year=year, exclude_id=listing.id
+            )
+
+            # Fall back to the broader make/model history (ignoring year) if the
+            # precise group doesn't have enough listings to be a reliable estimate.
+            if len(prices) < self.min_group_size and year is not None:
+                prices = db.get_historical_prices(
+                    conn, listing.make, listing.model, year=None, exclude_id=listing.id
+                )
+
+            comparable_count = len(prices)
             market_price = None
             deal_score_pct = None
             is_good_deal = False

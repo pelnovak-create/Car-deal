@@ -50,14 +50,14 @@ def run_once(config: dict, dry_run: bool = False) -> int:
         deal_threshold_pct=config["pricing"]["deal_threshold_pct"],
         min_group_size=config["pricing"]["min_group_size"],
     )
-    scored = pricer.score(filtered)
-
     new_good_deals: list[ScoredListing] = []
     with db.connect(config["database"]["path"]) as conn:
+        scored = pricer.score_with_history(filtered, conn)
+
         for item in scored:
             is_new = db.upsert_scored_listing(conn, item)
             item.is_new = is_new
-            if is_new:
+            if is_new and item.is_good_deal:
                 new_good_deals.append(item)
 
         if new_good_deals and not dry_run:

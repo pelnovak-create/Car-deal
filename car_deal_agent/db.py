@@ -102,3 +102,29 @@ def mark_notified(conn: sqlite3.Connection, listing_ids: list[str]) -> None:
 
 def get_listing(conn: sqlite3.Connection, listing_id: str) -> Optional[sqlite3.Row]:
     return conn.execute("SELECT * FROM listings WHERE id = ?", (listing_id,)).fetchone()
+
+
+def get_historical_prices(
+    conn: sqlite3.Connection,
+    make: str,
+    model: str,
+    year: Optional[int] = None,
+    exclude_id: Optional[str] = None,
+) -> list[int]:
+    """Returns past prices seen for a make/model(/year), for market-price estimation."""
+    make = (make or "").strip().lower()
+    model = (model or "").strip().lower()
+    if not make or not model:
+        return []
+
+    query = "SELECT price FROM listings WHERE lower(make) = ? AND lower(model) = ? AND price IS NOT NULL"
+    params: list = [make, model]
+    if year is not None:
+        query += " AND year = ?"
+        params.append(year)
+    if exclude_id is not None:
+        query += " AND id != ?"
+        params.append(exclude_id)
+
+    rows = conn.execute(query, params).fetchall()
+    return [row["price"] for row in rows]
