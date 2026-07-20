@@ -54,19 +54,19 @@ AUTOTRADER_HTML = """
 
 GUMTREE_HTML = """
 <html><body>
-<article class="listing-tile">
-  <a class="listing-link" href="/p/cars/volkswagen-golf/1234567890">
-    <h2 class="listing-title">Volkswagen Golf 2.0 GTD</h2>
+<div data-q="search-result">
+  <a data-q="search-result-anchor" href="/p/cars/volkswagen-golf/1234567890">
+    <div data-q="tile-title">Volkswagen Golf 2.0 GTD</div>
   </a>
-  <strong class="listing-price">£12,250</strong>
-  <div class="listing-attributes">
+  <div data-q="tile-price">£12,250</div>
+  <div data-q="tile-attributes">
     <span>2020</span>
     <span>38,000 miles</span>
     <span>Diesel</span>
     <span>Manual</span>
   </div>
-  <span class="listing-location">Manchester</span>
-</article>
+  <div data-q="tile-location">Manchester</div>
+</div>
 </body></html>
 """
 
