@@ -1,3 +1,4 @@
+import re
 from unittest.mock import MagicMock, patch
 
 from car_deal_agent.models import Listing, ScoredListing
@@ -7,8 +8,18 @@ from car_deal_agent.notifier import (
     _format_listing_telegram,
 )
 
+# Only our own <b>/</b> tags are allowed to appear as real HTML in a rendered
+# message; anything else found in this shape means scraped data broke out of
+# escaping and would either corrupt formatting or make Telegram's HTML parser
+# reject the whole message ("can't parse entities").
+_ALLOWED_TAGS = {"<b>", "</b>"}
+_TAG_RE = re.compile(r"<[^>]*>")
 
-def make_scored(deal_score_pct=18.0, market_price=12000, title="Volkswagen Golf", url="https://example.com/1"):
+
+def make_scored(
+    deal_score_pct=18.0, market_price=12000, title="Volkswagen Golf",
+    url="https://example.com/1", location="London",
+):
     listing = Listing(
         source="autotrader",
         external_id="1",
@@ -19,7 +30,7 @@ def make_scored(deal_score_pct=18.0, market_price=12000, title="Volkswagen Golf"
         model="Golf",
         year=2018,
         mileage=40000,
-        location="London",
+        location=location,
     )
     return ScoredListing(
         listing=listing, market_price=market_price, deal_score_pct=deal_score_pct,
@@ -53,6 +64,35 @@ def test_format_listing_telegram_escapes_html_special_chars():
     assert "a=1&amp;b=2" in text
     # raw unescaped chars must not leak into the HTML message
     assert "<script>" not in text
+
+
+def test_format_listing_telegram_escapes_location():
+    scored = make_scored(location="Stoke-on-Trent & Environs <VIP>")
+    text = _format_listing_telegram(scored)
+    assert "Stoke-on-Trent &amp; Environs &lt;VIP&gt;" in text
+    assert "<VIP>" not in text
+
+
+def test_format_listing_telegram_rejects_injected_fake_tags():
+    """Scraped listing data containing literal '<b>'/'<i>'/etc. must not be
+    able to inject real formatting or unbalance our own <b>...</b> wrapper --
+    only our own tags may appear unescaped in the output."""
+    malicious_title = "<b>FREE MONEY</b> <i>click here</i> <a href=evil>x</a>"
+    scored = make_scored(title=malicious_title, location="<script>bad()</script>")
+    text = _format_listing_telegram(scored)
+
+    found_tags = set(_TAG_RE.findall(text))
+    assert found_tags <= _ALLOWED_TAGS, f"unexpected raw tags leaked into message: {found_tags - _ALLOWED_TAGS}"
+    # the malicious markup should show up as escaped, inert text instead
+    assert "&lt;b&gt;FREE MONEY&lt;/b&gt;" in text
+    assert "&lt;script&gt;bad()&lt;/script&gt;" in text
+
+
+def test_format_listing_telegram_handles_bare_ampersand():
+    scored = make_scored(title="Smith & Sons Ltd")
+    text = _format_listing_telegram(scored)
+    assert "Smith &amp; Sons Ltd" in text
+    assert "Smith & Sons Ltd" not in text  # bare & must not appear unescaped
 
 
 def test_chunk_telegram_messages_keeps_parts_whole():
