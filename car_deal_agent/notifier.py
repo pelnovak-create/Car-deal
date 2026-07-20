@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 import shutil
 import smtplib
@@ -29,6 +30,53 @@ def _format_listing(scored: ScoredListing) -> str:
         f"  {deal}\n"
         f"  {l.url}"
     )
+
+
+def _format_listing_telegram(scored: ScoredListing) -> str:
+    """Telegram version of the listing summary: uses HTML formatting (Telegram's
+    parse_mode=HTML) to put the %-below-market figure in bold near the top,
+    so it's visible without reading the rest of the message."""
+    l = scored.listing
+    price = f"£{l.price:,}" if l.price is not None else "price n/a"
+    mileage = f"{l.mileage:,} mi" if l.mileage is not None else "mileage n/a"
+    location = html.escape(l.location) if l.location else "location n/a"
+    title = html.escape(l.title)
+
+    if scored.deal_score_pct is not None:
+        headline = f"🔥 <b>{scored.deal_score_pct:.0f}% below market average</b>"
+        market_line = (
+            f"Est. market price: £{scored.market_price:,.0f} "
+            f"({scored.comparable_count} comparable listing"
+            f"{'s' if scored.comparable_count != 1 else ''})"
+        )
+    else:
+        headline = "<b>Good deal</b>"
+        market_line = "No market estimate available"
+
+    return (
+        f"{headline}\n"
+        f"<b>{title}</b> — {price}, {mileage}, {location}\n"
+        f"{market_line}\n"
+        f"{html.escape(l.url)}"
+    )
+
+
+def _chunk_telegram_messages(parts: list[str], limit: int = 4000) -> list[str]:
+    """Group whole message parts into <=limit-char chunks without ever
+    splitting a part's markup across two messages (Telegram's HTML parser
+    would reject a message with an unclosed tag)."""
+    messages: list[str] = []
+    current = ""
+    for part in parts:
+        candidate = f"{current}\n\n{part}" if current else part
+        if len(candidate) > limit and current:
+            messages.append(current)
+            current = part
+        else:
+            current = candidate
+    if current:
+        messages.append(current)
+    return messages
 
 
 class Notifier(ABC):
@@ -100,15 +148,19 @@ class TelegramNotifier(Notifier):
         if not listings:
             return
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-        text = f"{len(listings)} good car deal(s) found\n\n" + "\n\n".join(
-            _format_listing(s) for s in listings
-        )
-        # Telegram caps message length at 4096 chars; split into chunks if needed.
-        for i in range(0, len(text), 4000):
-            chunk = text[i : i + 4000]
+        header = f"<b>{len(listings)} good car deal(s) found</b>"
+        parts = [header] + [_format_listing_telegram(s) for s in listings]
+        # Telegram caps message length at 4096 chars; split on listing
+        # boundaries (never mid-HTML-tag) if needed.
+        for chunk in _chunk_telegram_messages(parts):
             resp = requests.post(
                 url,
-                json={"chat_id": self.chat_id, "text": chunk, "disable_web_page_preview": True},
+                json={
+                    "chat_id": self.chat_id,
+                    "text": chunk,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                },
                 timeout=15,
             )
             resp.raise_for_status()

@@ -31,7 +31,10 @@ new listings.
    good deals trigger a notification.
 5. **Notify** — `notifier.py` supports console output, local desktop
    notifications (`notify-send` on Linux), email (SMTP), and Telegram. Enable
-   any combination in your config.
+   any combination in your config. Telegram messages use HTML formatting to
+   bold the %-below-market figure right at the top of each alert (e.g. "🔥
+   **18% below market average**"), so the headline number is visible without
+   opening/reading the full message.
 
 ## Setup
 
