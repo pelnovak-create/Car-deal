@@ -31,10 +31,17 @@ new listings.
    good deals trigger a notification.
 5. **Notify** — `notifier.py` supports console output, local desktop
    notifications (`notify-send` on Linux), email (SMTP), and Telegram. Enable
-   any combination in your config. Telegram messages use HTML formatting to
-   bold the %-below-market figure right at the top of each alert (e.g. "🔥
-   **18% below market average**"), so the headline number is visible without
-   opening/reading the full message.
+   any combination in your config. Telegram messages use HTML formatting
+   (`parse_mode: "HTML"`) to bold the %-below-market figure right at the top
+   of each alert, e.g. "💥 **41% below market** (est. £2,645, 26
+   comparables)", so the headline number is visible without opening/reading
+   the full message. Run with `--verbose` to log the exact outgoing payload
+   and Telegram's raw API response for each message sent — useful if
+   formatting ever looks wrong and you need to confirm what was actually
+   sent vs. what a client rendered. `scripts/send_test_telegram_message.py`
+   fires one real message through the same code path standalone, so you can
+   confirm rendering/escaping against the live API without waiting for a
+   real deal to trigger a notification.
 
 ## Setup
 

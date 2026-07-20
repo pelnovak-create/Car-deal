@@ -34,8 +34,9 @@ def _format_listing(scored: ScoredListing) -> str:
 
 def _format_listing_telegram(scored: ScoredListing) -> str:
     """Telegram version of the listing summary: uses HTML formatting (Telegram's
-    parse_mode=HTML) to put the %-below-market figure in bold near the top,
-    so it's visible without reading the rest of the message."""
+    parse_mode=HTML) to put the %-below-market figure in bold right at the
+    top, so it's visible without reading the rest of the message. Target
+    shape: "💥 <b>41% below market</b> (est. £2,645, 26 comparables)"."""
     l = scored.listing
     price = f"£{l.price:,}" if l.price is not None else "price n/a"
     mileage = f"{l.mileage:,} mi" if l.mileage is not None else "mileage n/a"
@@ -43,20 +44,17 @@ def _format_listing_telegram(scored: ScoredListing) -> str:
     title = html.escape(l.title)
 
     if scored.deal_score_pct is not None:
-        headline = f"🔥 <b>{scored.deal_score_pct:.0f}% below market average</b>"
-        market_line = (
-            f"Est. market price: £{scored.market_price:,.0f} "
-            f"({scored.comparable_count} comparable listing"
-            f"{'s' if scored.comparable_count != 1 else ''})"
+        comparable_word = "comparable" if scored.comparable_count == 1 else "comparables"
+        headline = (
+            f"💥 <b>{scored.deal_score_pct:.0f}% below market</b> "
+            f"(est. £{scored.market_price:,.0f}, {scored.comparable_count} {comparable_word})"
         )
     else:
-        headline = "<b>Good deal</b>"
-        market_line = "No market estimate available"
+        headline = "💥 <b>Good deal</b> (no market estimate available)"
 
     return (
         f"{headline}\n"
         f"<b>{title}</b> — {price}, {mileage}, {location}\n"
-        f"{market_line}\n"
         f"{html.escape(l.url)}"
     )
 
@@ -153,17 +151,19 @@ class TelegramNotifier(Notifier):
         # Telegram caps message length at 4096 chars; split on listing
         # boundaries (never mid-HTML-tag) if needed.
         for chunk in _chunk_telegram_messages(parts):
-            resp = requests.post(
-                url,
-                json={
-                    "chat_id": self.chat_id,
-                    "text": chunk,
-                    "parse_mode": "HTML",
-                    "disable_web_page_preview": True,
-                },
-                timeout=15,
-            )
+            payload = {
+                "chat_id": self.chat_id,
+                "text": chunk,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            }
+            # Log the exact outgoing text (tags and all) right before it's
+            # sent, so a formatting regression is visible in the logs rather
+            # than only discoverable by eye in the Telegram app.
+            logger.debug("Telegram outgoing payload: %r", payload)
+            resp = requests.post(url, json=payload, timeout=15)
             resp.raise_for_status()
+            logger.debug("Telegram API response [%s]: %s", resp.status_code, resp.text)
 
 
 class MultiNotifier(Notifier):

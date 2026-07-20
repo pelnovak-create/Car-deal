@@ -18,7 +18,7 @@ _TAG_RE = re.compile(r"<[^>]*>")
 
 def make_scored(
     deal_score_pct=18.0, market_price=12000, title="Volkswagen Golf",
-    url="https://example.com/1", location="London",
+    url="https://example.com/1", location="London", comparable_count=5,
 ):
     listing = Listing(
         source="autotrader",
@@ -34,25 +34,30 @@ def make_scored(
     )
     return ScoredListing(
         listing=listing, market_price=market_price, deal_score_pct=deal_score_pct,
-        comparable_count=5, is_good_deal=True,
+        comparable_count=comparable_count, is_good_deal=True,
     )
 
 
 def test_format_listing_telegram_bolds_percentage_near_top():
-    scored = make_scored(deal_score_pct=18.4)
+    scored = make_scored(deal_score_pct=41.0, market_price=2645, comparable_count=26)
     text = _format_listing_telegram(scored)
     lines = text.splitlines()
-    assert lines[0] == "🔥 <b>18% below market average</b>"
+    assert lines[0] == "💥 <b>41% below market</b> (est. £2,645, 26 comparables)"
     assert "<b>Volkswagen Golf</b>" in text
     assert "£9,840" in text
-    assert "Est. market price: £12,000" in text
+
+
+def test_format_listing_telegram_singular_comparable():
+    scored = make_scored(deal_score_pct=41.0, market_price=2645, comparable_count=1)
+    text = _format_listing_telegram(scored)
+    assert "1 comparable)" in text
+    assert "1 comparables)" not in text
 
 
 def test_format_listing_telegram_handles_missing_market_estimate():
     scored = make_scored(deal_score_pct=None, market_price=None)
     text = _format_listing_telegram(scored)
-    assert "<b>Good deal</b>" in text
-    assert "No market estimate available" in text
+    assert "💥 <b>Good deal</b> (no market estimate available)" in text.splitlines()[0]
     # must not crash formatting a percentage against None
     assert "None" not in text
 
@@ -122,7 +127,7 @@ def test_telegram_notifier_sends_html_parse_mode(mock_post):
     payload = kwargs["json"]
     assert payload["chat_id"] == "42"
     assert payload["parse_mode"] == "HTML"
-    assert "🔥 <b>18% below market average</b>" in payload["text"]
+    assert "💥 <b>18% below market</b>" in payload["text"]
     assert "https://api.telegram.org/botTOKEN/sendMessage" == mock_post.call_args[0][0]
 
 
